@@ -72,7 +72,7 @@ server_loop(ClientList, StorePid, ObjectsMgrPid, DepsMgrPid, TSGenerator, Transa
             
             %% Confirm and handle outcoming status
             {UpdatedTransactions, Status} = do_confirm(Tc, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions),
-            io:format("Transaction t.~p ended with status ~p~n", [Tc, Status]),
+            io:format("Transaction t.~p finished confirm with status ~p~n", [Tc, Status]),
             StorePid ! {print, self()},
             server_loop(ClientList,StorePid,ObjectsMgrPid,DepsMgrPid,TSGenerator,UpdatedTransactions);
         
@@ -373,7 +373,8 @@ propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) -
                     %% Transaction doesn't exist anymore. Ignore
                     io:format("Dependency has been deleted. Ignoring~n"),
                     propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions);
-                {value, {C, S, Deps, Old_Obj}} ->                    
+                {value, {C, S, Deps, Old_Obj}} ->         
+                    %% Update dependencies of First_Dep
                     Up_Deps = dict:store(Tc, Status, Deps),
                     Up_Transactions = gb_trees:enter(First_Dep, {C, S, Up_Deps, Old_Obj}, Transactions),
                     %% Attempt to commit First_Dep only if its already 'waiting'
