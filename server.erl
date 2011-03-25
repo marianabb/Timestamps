@@ -107,16 +107,18 @@ server_loop(ClientList, StorePid, ObjectsMgrPid, DepsMgrPid, TSGenerator, Transa
                             %% Send the message to the client
                             Client ! {abort, self()},
                             %% Propagate the event: Update Dependency Dictionary
-                            propagate_event(Tc,'aborted',ObjectsMgrPid,DepsMgrPid,StorePid,UpdatedTransactions);
-                            
+                            TPropagated = propagate_event(Tc,'aborted',ObjectsMgrPid,DepsMgrPid,
+                                                          StorePid,UpdatedTransactions),
+                            server_loop(ClientList,StorePid,ObjectsMgrPid,DepsMgrPid,TSGenerator,TPropagated);
+                        
                         continue ->
                             %% If action was successful: continue
                             io:format("Action ~p was successful~n", [Act]),
-                            ok
-                    end,
-                    server_loop(ClientList,StorePid,ObjectsMgrPid,DepsMgrPid,TSGenerator,UpdatedTransactions)
-            end
+                            server_loop(ClientList,StorePid,ObjectsMgrPid,DepsMgrPid,TSGenerator,UpdatedTransactions)
+                    end
             
+            end
+    
     after 50000 ->
             case all_gone(ClientList) of
                 true -> exit(normal);    
@@ -283,14 +285,15 @@ do_confirm(Tc, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) ->
                                                                           Transactions),
                                     %% Abort Tc
                                     %% Restore original values and timestamps to modified variable
-                                    do_restore(Tc, ObjectsMgrPid, Transactions),
+                                    do_restore(Tc, ObjectsMgrPid, UpdatedTransactions2),
                                     %% Send the message to the client
                                     Client ! {abort, self()},
                                     %% Propagate the event: Update Dependency Dictionary
-                                    propagate_event(Tc,'aborted',ObjectsMgrPid,DepsMgrPid,StorePid,Transactions),
+                                    PropagatedT = propagate_event(Tc,'aborted',ObjectsMgrPid,DepsMgrPid,
+                                                    StorePid,UpdatedTransactions2),
                                     %% Its safe to delete Tc here
                                     io:format("Transaction ~p is done by abortion. Will be deleted~n", [Tc]),
-                                    UpdatedTransactions3 = gb_trees:delete_any(Tc, UpdatedTransactions2),
+                                    UpdatedTransactions3 = gb_trees:delete_any(Tc, PropagatedT),
                                     {UpdatedTransactions3, aborted_deps};
                                 false ->
                                     io:format("Confirm: t.~p can commit~n", [Tc]),
@@ -299,10 +302,11 @@ do_confirm(Tc, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) ->
                                     %% Send the message to the client
                                     Client ! {committed, self()},
                                     %% Propagate the event: Update Dependency Dictionary
-                                    propagate_event(Tc,'committed',ObjectsMgrPid,DepsMgrPid,StorePid,Transactions),
+                                    PropagatedCT = propagate_event(Tc,'committed',ObjectsMgrPid,DepsMgrPid,
+                                                                   StorePid,Transactions),
                                     %% Delete Tc
                                     io:format("Transaction ~p is done by commitment. Will be deleted~n", [Tc]),
-                                    TransactionsCommit = gb_trees:delete_any(Tc, Transactions),
+                                    TransactionsCommit = gb_trees:delete_any(Tc, PropagatedCT),
                                     {TransactionsCommit, committed}
                             end
                     end;
@@ -353,32 +357,41 @@ check_deps_aux(Status, [{_, DepStatus}|L]) ->
 
 %% - Propagates abort/commit events on the dependencies
 propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) ->
+    io:format("Propagate: Event ~p of t.~p will be propagated~n", [Status, Tc]),
     DepsMgrPid ! {dequeue, Tc},
     receive
         no_deps ->
+            io:format("Propagate: All dependencies have been checked~n"),
             %% No more dependencies. Queue has been deleted.
             %% Return Transactions
             Transactions;
         {dependency, First_Dep} ->
+            io:format("Propagate: Checking dependency ~p of t.~p~n", [First_Dep, Tc]),
             %% Update status of Tc in this dependent transaction
-            {value, {C, S, Deps, Old_Obj}} = gb_trees:lookup(First_Dep, Transactions),
-            Up_Deps = dict:store(Tc, Status, Deps),
-            Up_Transactions = gb_trees:enter(First_Dep, {C, S, Up_Deps, Old_Obj}, Transactions),
-
-            %% Attempt to commit First_Dep only if its already 'waiting'
-            case S = 'waiting' of
-                true ->
-                    io:format("t.~p was waiting: Attempting commit~n", [First_Dep]),
-                    {Up_Transactions2, S2} = do_confirm(First_Dep,ObjectsMgrPid,DepsMgrPid,StorePid,Up_Transactions),
-                    io:format("Waiting transaction t.~p ended with status ~p~n", [Tc, Status]),
+            case gb_trees:lookup(First_Dep, Transactions) of
+                none ->
+                    %% Transaction doesn't exist anymore. Ignore
+                    io:format("Dependency has been deleted. Ignoring~n"),
+                    propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions);
+                {value, {C, S, Deps, Old_Obj}} ->                    
+                    Up_Deps = dict:store(Tc, Status, Deps),
+                    Up_Transactions = gb_trees:enter(First_Dep, {C, S, Up_Deps, Old_Obj}, Transactions),
+                    %% Attempt to commit First_Dep only if its already 'waiting'
+                    case (S =:= 'waiting') of
+                        true ->
+                            io:format("t.~p was waiting: Attempting commit~n", [First_Dep]),
+                            {Up_Transactions2, S2} = do_confirm(First_Dep,ObjectsMgrPid,DepsMgrPid,
+                                                                StorePid,Up_Transactions),
+                            io:format("Waiting transaction t.~p ended with status ~p~n", [Tc, Status]),
+                            %% Continue propagation until the Tc queue is empty
+                            propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Up_Transactions2);
+                        false ->
+                            %% Don't do anything unless the transaction is waiting
+                            ok
+                    end,
                     %% Continue propagation until the Tc queue is empty
-                    propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Up_Transactions2);
-                false ->
-                    %% Don't do anything unless the transaction is waiting
-                    ok
-            end,
-            %% Continue propagation until the Tc queue is empty
-            propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Up_Transactions)
+                    propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Up_Transactions)
+            end
     end.
 
 %% - A manager for dependencies between transactions
