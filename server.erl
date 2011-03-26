@@ -116,9 +116,7 @@ server_loop(ClientList, StorePid, ObjectsMgrPid, DepsMgrPid, TSGenerator, Transa
                             io:format("Action ~p was successful~n", [Act]),
                             server_loop(ClientList,StorePid,ObjectsMgrPid,DepsMgrPid,TSGenerator,UpdatedTransactions)
                     end
-            
-            end
-    
+            end   
     after 50000 ->
             case all_gone(ClientList) of
                 true -> exit(normal);    
