@@ -47,7 +47,7 @@ server_loop(ClientList, StorePid, ObjectsMgrPid, DepsMgrPid, TSGenerator, Transa
     receive
         {login, MM, Client} -> 
             MM ! {ok, self()},
-            io:format("New client has joined the server:~p.~n", [Client]),
+            io:format("Received request to connect from: ~p.~n", [Client]),
             StorePid ! {print, self()},
             server_loop(dict:store(Client,0,ClientList),StorePid,ObjectsMgrPid,DepsMgrPid,TSGenerator,Transactions);
         {close, Client} -> 
@@ -63,7 +63,7 @@ server_loop(ClientList, StorePid, ObjectsMgrPid, DepsMgrPid, TSGenerator, Transa
             ClientLUpdated = dict:store(Client,TS,ClientList),
             %% Insert a new transaction in the tree
             UpdatedTransactions = gb_trees:insert(TS,{Client,'going-on',dict:new(),dict:new()},Transactions),
-            io:format("Client ~p has began transaction ~p .~n", [Client, TS]),
+            io:format("Client ~p has began transaction ~p.~n", [Client, TS]),
             Client ! {proceed, self()},
             server_loop(ClientLUpdated,StorePid,ObjectsMgrPid,DepsMgrPid,TSGenerator,UpdatedTransactions);
         {confirm, Client} -> 
@@ -159,7 +159,7 @@ do_read(Ts, VName, Transactions, ObjectsMgrPid, DepsMgrPid) ->
             case gb_trees:lookup(WTS, Transactions) of
                 none ->
                     %% No dependency to add
-                    io:format("Reading ~p. No dependencies to add~n", [VName]),
+                    %%io:format("Reading ~p. No dependencies to add~n", [VName]),
                     %% Update RTS of the variable to max(RTS, Ts)
                     ObjectsMgrPid ! {updateObject, VName, {VValue, max(RTS, Ts), WTS}},
                     {Transactions, continue};
@@ -186,7 +186,7 @@ do_read(Ts, VName, Transactions, ObjectsMgrPid, DepsMgrPid) ->
 
 %% - Write
 do_write(Ts, VName, New_Value, Transactions, ObjectsMgrPid) ->
-    io:format("\tValidating write rule~n"),
+    %%io:format("\tValidating write rule~n"),
     %% Get information for the variable VName
     ObjectsMgrPid ! {getObject, VName},
     {VValue, RTS, WTS} = receive {object, O} -> O end,
@@ -259,19 +259,19 @@ do_confirm(Tc, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) ->
         true ->
             %% The abort message has already been sent and the Old timestamps managed
             %% Must delete Tc from Transactions
-            io:format("Transaction ~p is done by abortion. Will be deleted~n", [Tc]),
+            io:format("\t\tConfirm: Transaction ~p is done by abortion. Will be deleted~n", [Tc]),
             TransactionsAbort = gb_trees:delete(Tc, Transactions),
             {TransactionsAbort, aborted};
         false ->
             case ((Status =:= 'going-on') or (Status =:= 'waiting')) of
                 true ->
-                    io:format("Confirming with status 'going-on' or 'waiting'~n"),
+                    %%io:format("Confirming with status 'going-on' or 'waiting'~n"),
                     %% No action of Tc has been aborted: Attempt to commit.
                     %% First check dependencies:
                     %% While Tc still depends on other T: Tc must wait
                     case check_deps(Tc, Transactions, 'going-on') of
                         true ->
-                            io:format("Confirm: t.~p must wait~n", [Tc]),
+                            io:format("\t\tConfirm: t.~p must wait~n", [Tc]),
                             %% Change status of Tc to 'waiting'
                             TransactionsWait = gb_trees:enter(Tc, {Client, 'waiting', Deps, Old_Obj}, Transactions),
                             {TransactionsWait, must_wait};
@@ -279,7 +279,7 @@ do_confirm(Tc, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) ->
                             %% If any transaction Tc depended on aborted: Tc must abort
                             case check_deps(Tc, Transactions, 'aborted') of
                                 true ->
-                                    io:format("Confirm: t.~p must abort because of dependencies~n", [Tc]),
+                                    io:format("\t\tConfirm: t.~p must abort because of dependencies~n", [Tc]),
                                     %% Change status of Tc to 'aborted'
                                     UpdatedTransactions2 = gb_trees:enter(Tc, {Client, 'aborted', Deps, Old_Obj}, 
                                                                           Transactions),
@@ -292,11 +292,11 @@ do_confirm(Tc, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) ->
                                     PropagatedT = propagate_event(Tc,'aborted',ObjectsMgrPid,DepsMgrPid,
                                                     StorePid,UpdatedTransactions2),
                                     %% Its safe to delete Tc here
-                                    io:format("Transaction ~p is done by abortion. Will be deleted~n", [Tc]),
+                                    io:format("\t\tConfirm: Transaction ~p is done by abortion. Will be deleted~n", [Tc]),
                                     UpdatedTransactions3 = gb_trees:delete_any(Tc, PropagatedT),
                                     {UpdatedTransactions3, aborted_deps};
                                 false ->
-                                    io:format("Confirm: t.~p can commit~n", [Tc]),
+                                    io:format("\t\tConfirm: t.~p can commit~n", [Tc]),
                                     %% Otherwise: COMMIT
                                     do_commit(Tc, StorePid, Transactions), %do_commit does not modify Transactions
                                     %% Send the message to the client
@@ -305,7 +305,8 @@ do_confirm(Tc, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) ->
                                     PropagatedCT = propagate_event(Tc,'committed',ObjectsMgrPid,DepsMgrPid,
                                                                    StorePid,Transactions),
                                     %% Delete Tc
-                                    io:format("Transaction ~p is done by commitment. Will be deleted~n", [Tc]),
+                                    io:format("\t\tConfirm: Transaction ~p is done by commitment. Will be deleted~n", 
+                                              [Tc]),
                                     TransactionsCommit = gb_trees:delete_any(Tc, PropagatedCT),
                                     {TransactionsCommit, committed}
                             end
@@ -356,22 +357,22 @@ check_deps_aux(Status, [{_, DepStatus}|L]) ->
 
 %% - Propagates abort/commit events on the dependencies
 propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) ->
-    io:format("Propagate: Event ~p of t.~p will be propagated~n", [Status, Tc]),
+    io:format("\tPropagate: Event ~p of t.~p will be propagated~n", [Status, Tc]),
     DepsMgrPid ! {dequeue, Tc},
     receive
         no_deps ->
-            io:format("Propagate: All dependencies have been checked~n"),
+            %%io:format("Propagate: All dependencies have been checked~n"),
             %% No more dependencies. Queue has been deleted.
             %% Return Transactions
-            io:format("Transactions after propagation: ~p~n", [Transactions]),
+            %%io:format("Transactions after propagation: ~p~n", [Transactions]),
             Transactions;
         {dependency, First_Dep} ->
-            io:format("Propagate: Checking dependency ~p of t.~p~n", [First_Dep, Tc]),
+            %%io:format("Propagate: Checking dependency ~p of t.~p~n", [First_Dep, Tc]),
             %% Update status of Tc in this dependent transaction
             case gb_trees:lookup(First_Dep, Transactions) of
                 none ->
                     %% Transaction doesn't exist anymore. Ignore
-                    io:format("Propagate: Dependency has been deleted. Ignoring~n"),
+                    %%io:format("Propagate: Dependency has been deleted. Ignoring~n"),
                     propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions);
                 {value, {C, S, Deps, Old_Obj}} ->
                     %% Update dependencies of First_Dep
@@ -380,16 +381,17 @@ propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) -
                     %% Attempt to commit First_Dep only if its already 'waiting'
                     case (S =:= 'waiting') of
                         true ->
-                            io:format("Propagate: t.~p was waiting: Attempting commit~n", [First_Dep]),
+                            io:format("\tPropagate: t.~p was waiting: Attempting commit~n", [First_Dep]),
                             {Up_Transactions2, S2} = do_confirm(First_Dep,ObjectsMgrPid,DepsMgrPid,
                                                                 StorePid,Up_Transactions),
-                            io:format("Propagate: Waiting transaction t.~p ended with status ~p~n", [First_Dep, S2]),
+                            io:format("\tPropagate: Waiting transaction t.~p ended with status ~p~n", [First_Dep, S2]),
                             %% Continue propagation until the Tc queue is empty
                             propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Up_Transactions2);
                         false ->
                             %% Don't do anything unless the transaction is waiting
                             %% Continue propagation until the Tc queue is empty
-                            io:format("Propagate: t.~p was not waiting. Continue with queue of ~p~n", [First_Dep, Tc]),
+                            io:format("\tPropagate: t.~p was not waiting. Continue with queue of ~p~n", 
+                                      [First_Dep, Tc]),
                             propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Up_Transactions)
                     end
             
