@@ -110,7 +110,8 @@ process(Window, ServerPid, Transaction, TrNr, TrNrGenerator) ->
 
 %% - Sending the transaction and waiting for confirmation
 send(Window, ServerPid, [], MsgNrGenerator, Transaction, TrNrGenerator) ->
-    ServerPid ! {confirm, self()}, %% Once all the list (transaction) items sent, send confirmation
+    %% Once all the list (transaction) items sent, send confirmation
+    ServerPid ! {confirm, self(),length(Transaction) + 1},
     receive	
 	{reconfirm, ServerPid} ->
 	    send(Window, ServerPid, [], MsgNrGenerator, Transaction, TrNrGenerator);
