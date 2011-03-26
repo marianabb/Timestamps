@@ -86,7 +86,7 @@ server_loop(ClientList, StorePid, ObjectsMgrPid, DepsMgrPid, TSGenerator, Transa
             {value, {Client, Status, _, _}} = gb_trees:lookup(Tc, Transactions),
             case Status of
                 'aborted' ->
-                    %% TODO Assuming everything is handled previously
+                    %% Everything was handled previously
                     server_loop(ClientList,StorePid,ObjectsMgrPid,DepsMgrPid,TSGenerator,Transactions);
                 'going-on' ->
                     {UpdatedTransactions, Result} = 
@@ -109,7 +109,6 @@ server_loop(ClientList, StorePid, ObjectsMgrPid, DepsMgrPid, TSGenerator, Transa
                             %% Propagate the event: Update Dependency Dictionary
                             TPropagated = propagate_event(Tc,'aborted',ObjectsMgrPid,DepsMgrPid,
                                                           StorePid,UpdatedTransactions),
-                            io:format("Abortion of ~p has been propagated. Server will continue receiving~n", [Tc]),
                             server_loop(ClientList,StorePid,ObjectsMgrPid,DepsMgrPid,TSGenerator,TPropagated);
                         
                         continue ->
@@ -272,7 +271,7 @@ do_confirm(Tc, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) ->
                     %% While Tc still depends on other T: Tc must wait
                     case check_deps(Tc, Transactions, 'going-on') of
                         true ->
-                            io:format("******Confirm: t.~p must wait~n", [Tc]),
+                            io:format("Confirm: t.~p must wait~n", [Tc]),
                             %% Change status of Tc to 'waiting'
                             TransactionsWait = gb_trees:enter(Tc, {Client, 'waiting', Deps, Old_Obj}, Transactions),
                             {TransactionsWait, must_wait};
@@ -340,9 +339,7 @@ object_manager(ServerPid, Objects) ->
 %% with the status 'Status'. If there at least one returns true,
 %% false otherwise
 check_deps(Tc, Transactions, Status) ->
-    io:format("Checking dependencies of t.~p~n", [Tc]),
     {value, {_, _, Deps, _}} = gb_trees:lookup(Tc, Transactions),
-    io:format("****Dependencies of ~p: ~p~n", [Tc, Deps]),    
     check_deps_aux(Status, dict:to_list(Deps)).
 
 check_deps_aux(_, []) ->
@@ -366,7 +363,7 @@ propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) -
             io:format("Propagate: All dependencies have been checked~n"),
             %% No more dependencies. Queue has been deleted.
             %% Return Transactions
-            io:format("AFTER PROPAGATION:: ~p~n", [Transactions]),
+            io:format("Transactions after propagation: ~p~n", [Transactions]),
             Transactions;
         {dependency, First_Dep} ->
             io:format("Propagate: Checking dependency ~p of t.~p~n", [First_Dep, Tc]),
@@ -378,7 +375,6 @@ propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) -
                     propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions);
                 {value, {C, S, Deps, Old_Obj}} ->
                     %% Update dependencies of First_Dep
-                    io:format("Propagate: Now ~p depends on ~p (~p)~n", [First_Dep, Tc, Status]),
                     Up_Deps = dict:store(Tc, Status, Deps),
                     Up_Transactions = gb_trees:enter(First_Dep, {C, S, Up_Deps, Old_Obj}, Transactions),
                     %% Attempt to commit First_Dep only if its already 'waiting'
@@ -394,7 +390,6 @@ propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Transactions) -
                             %% Don't do anything unless the transaction is waiting
                             %% Continue propagation until the Tc queue is empty
                             io:format("Propagate: t.~p was not waiting. Continue with queue of ~p~n", [First_Dep, Tc]),
-                            io:format("Transactions here: ~p~n", [Up_Transactions]),
                             propagate_event(Tc, Status, ObjectsMgrPid, DepsMgrPid, StorePid, Up_Transactions)
                     end
             
@@ -417,14 +412,11 @@ dependency_manager(ServerPid, Queue_Dict) ->
             UpdatedQueue_Dict = gb_trees:enter(Transaction, Updated_TQueue, Queue_Dict),
             dependency_manager(ServerPid, UpdatedQueue_Dict);
         {dequeue, Transaction} ->
-            io:format("Return t.~p on QUEUE_DICT: ~p ~n", [Transaction, Queue_Dict]),
             case gb_trees:lookup(Transaction, Queue_Dict) of
                 none ->	
-                    io:format("There is no queue~n"),
                     ServerPid ! no_deps, % No other T is waiting for Transaction
                     dependency_manager(ServerPid, Queue_Dict);
                 {value, Q} ->
-                    io:format("The queue is ~p~n", [Q]),
                     case queue:out(Q) of 
                        %% Send the first dependent T to the server
                         {{value, First_Dep}, QUpdted} -> 
